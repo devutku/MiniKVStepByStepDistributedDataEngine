@@ -45,7 +45,15 @@ public class MiniKVHttpServer {
                 if ("GET".equalsIgnoreCase(method)) {
                     handleGet(exchange, segments);
                 } else if ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method)) {
-                    handleSet(exchange, segments);
+                    if (segments.length >= 2 && "compact".equalsIgnoreCase(segments[1])) {
+                        // POST /compact çağrıldığında
+                        storage.compact();
+                        sendResponse(exchange, 200, "Compaction tamamlandi. Dosya optimize edildi.");
+                    } else {
+                        handleSet(exchange, segments);
+                    }
+                } else if ("DELETE".equalsIgnoreCase(method)) {
+                    handleDelete(exchange, segments);
                 } else {
                     sendResponse(exchange, 405, "Method Not Allowed");
                 }
@@ -100,6 +108,21 @@ public class MiniKVHttpServer {
             exchange.sendResponseHeaders(statusCode, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(bytes);
+            }
+        }
+        private void handleDelete(HttpExchange exchange, String[] segments) throws IOException {
+            if (segments.length < 3 || segments[2].isBlank()) {
+                sendResponse(exchange, 400, "Hata: Key belirtilmedi. Örnek: /kv/user_1");
+                return;
+            }
+
+            String key = segments[2];
+            boolean deleted = storage.delete(key);
+
+            if (deleted) {
+                sendResponse(exchange, 200, "OK: " + key + " silindi.");
+            } else {
+                sendResponse(exchange, 404, "Silinemedi: Key bulunamadi.");
             }
         }
     }
