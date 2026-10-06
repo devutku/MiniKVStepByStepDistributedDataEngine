@@ -13,4 +13,4 @@ ENV ROLE=LEADER
 ENV DATA_FILE=/app/data/data.db
 
 EXPOSE 8080
-CMD ["java", "Main"]
+CMD ["java", "DockerContainerMain"]
