@@ -1,4 +1,7 @@
-void main() throws IOException {
+import java.io.IOException;
+
+public class Main {
+    void main() throws IOException {
     /*String dbPath = "data.db";
 
     try (MiniKVStorage storage = new MiniKVStorage(dbPath)) {
@@ -13,29 +16,30 @@ void main() throws IOException {
         IO.println("Role: " + storage.get("role"));
 
     }*/
-            String dbPath = "data.db";
-            int port = 8080;
+        String dbPath = "data.db";
+        int port = 8080;
 
-            try {
-                // Depolama motorunu başlat
-                MiniKVStorage storage = new MiniKVStorage(dbPath);
+        try {
+            // Depolama motorunu başlat
+            MiniKVStorage storage = new MiniKVStorage(dbPath);
 
-                // HTTP API katmanını motor ile bağla
-                MiniKVHttpServer server = new MiniKVHttpServer(port, storage);
-                server.start();
+            // HTTP API katmanını motor ile bağla
+            MiniKVHttpServer server = new MiniKVHttpServer(port, storage, NodeRole.FOLLOWER);
+            server.start();
 
-                // JVM kapandığında dosyaları düzgün kapatmak için shutdown hook
-                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                    System.out.println("Sunucu kapatılıyor...");
-                    server.stop();
-                    try {
-                        storage.close();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }));
+            // JVM kapandığında dosyaları düzgün kapatmak için shutdown hook
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                System.out.println("Sunucu kapatılıyor...");
+                server.stop();
+                try {
+                    storage.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }));
 
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+        } catch (IOException e) {
+            e.printStackTrace();
         }
+    }
+}
