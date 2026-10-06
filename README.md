@@ -1,15 +1,15 @@
 # MiniKV: Distributed Key-Value Storage Engine
 
-MiniKV is an educational, production-oriented distributed Key-Value store implemented in Java. Inspired by the **Bitcask** storage architecture (from the paper *A Log-Structured Hash Table for Fast Key/Value Data* and Martin Kleppmann's *Designing Data-Intensive Applications*), MiniKV combines an append-only binary log format with an in-memory hash index ($O(1)$ lookup) and asynchronous single-leader replication.
+MiniKV is an educational, production-oriented distributed Key-Value store implemented in Java. Inspired by the **Bitcask** storage architecture (from the paper *A Log-Structured Hash Table for Fast Key/Value Data* and Martin Kleppmann's *Designing Data-Intensive Applications*), MiniKV combines an append-only binary log format with an in-memory hash index ($O(1)$ lookup), asynchronous single-leader replication, fault-tolerant backlog queues, and multi-node Docker Compose orchestration.
 
 ---
 
 ## 🏗️ Architecture Overview
 
-MiniKV decouples storage concerns from networking and replication layers:
+MiniKV decouples storage concerns from networking, replication, and containerization layers:
 
 ```text
-Client (curl / Postman)
+Client (curl / Postman / k6)
       │
       ▼  (HTTP POST / DELETE / GET)
 ┌───────────────────────────────────────────────┐
@@ -34,9 +34,9 @@ Client (curl / Postman)
 
 ---
 
-## 🌐 Distributed Replication Architecture
+## 🌐 Distributed Replication & Fault Tolerance
 
-MiniKV implements a **Single-Leader Asynchronous Replication** model to ensure high read scalability and fault isolation:
+MiniKV implements a **Single-Leader Asynchronous Replication** model with an internal backlog queue:
 
 ```text
                        Client Writes
@@ -46,8 +46,8 @@ MiniKV implements a **Single-Leader Asynchronous Replication** model to ensure h
                  │    Leader Node      │
                  │   (leader_data.db)  │
                  └──────────┬──────────┘
-                            │ Asynchronous
-                            │ Replication Stream
+                            │ Asynchronous Queue
+                            │ (BlockingQueue + Retry Worker)
                             ▼ (/internal/replicate)
                  ┌─────────────────────┐
                  │    Follower Node    │
@@ -58,9 +58,42 @@ MiniKV implements a **Single-Leader Asynchronous Replication** model to ensure h
                             │ (Port 8081)
 ```
 
-1. **Leader Node (`:8080`):** Handles all write (`POST`), update, and delete (`DELETE`) traffic. Every modification is persisted locally and broadcast asynchronously to follower nodes.
+1. **Leader Node (`:8080`):** Handles all write (`POST`), update, and delete (`DELETE`) traffic. Every modification is persisted locally and placed onto a FIFO `BlockingQueue`.
 2. **Follower Node (`:8081`):** Serves read traffic (`GET`). Direct writes to follower nodes are blocked via safety guardrails (`403 Forbidden`).
-3. **Internal Stream:** Replication packets (`ACTION:KEY:VALUE`) update the follower's private disk log and in-memory index independently.
+3. **Fault-Tolerant Retry Worker:** If the follower node crashes or experiences network disconnection, the leader keeps serving writes without blocking clients. An internal worker thread continuously retries flushing pending replication tasks until the follower recovers (**Eventual Consistency**).
+
+---
+
+## 🐳 Docker Compose Orchestration
+
+The cluster can be spun up in fully isolated containers across a dedicated internal bridge network:
+
+```yaml
+services:
+  leader:
+    build: .
+    container_name: minikv-leader
+    ports: ["8080:8080"]
+    environment:
+      - PORT=8080
+      - ROLE=LEADER
+      - DATA_FILE=/app/data/leader_data.db
+      - FOLLOWER_URL=http://follower:8081
+
+  follower:
+    build: .
+    container_name: minikv-follower
+    ports: ["8081:8081"]
+    environment:
+      - PORT=8081
+      - ROLE=FOLLOWER
+      - DATA_FILE=/app/data/follower_data.db
+```
+
+### Running with Docker:
+```bash
+docker compose up --build
+```
 
 ---
 
@@ -83,49 +116,38 @@ Load testing was conducted with **k6** simulating a realistic 80/20 Read-to-Writ
 
 ---
 
-## 🛠️ Quickstart & Cluster Execution
+## 🛠️ API Quickstart
 
-### 1. Run the Cluster
-Compile and execute `ClusterMain.java` to start both the Leader (`8080`) and Follower (`8081`) simultaneously:
-
+### 1. Write Data to Leader
 ```bash
-# Outputs:
-# [LEADER] MiniKV HTTP Sunucusu ayakta: http://localhost:8080
-# [FOLLOWER] MiniKV HTTP Sunucusu ayakta: http://localhost:8081
-# >>> Kume (Cluster) hazir: Leader (8080), Follower (8081) <<<
-```
-
-### 2. Write Data to Leader
-```bash
-curl -X POST [http://127.0.0.1:8080/kv/engineer](http://127.0.0.1:8080/kv/engineer) -d "Utku"
+curl -X POST http://localhost:8080/kv/engineer -d "Utku"
 # Response: OK: engineer kaydedildi. (HTTP 201)
 ```
 
-### 3. Read Data from Follower
+### 2. Read Data from Follower
 ```bash
-curl -X GET [http://127.0.0.1:8081/kv/engineer](http://127.0.0.1:8081/kv/engineer)
+curl -X GET http://localhost:8081/kv/engineer
 # Response: Utku (HTTP 200)
 ```
 
-### 4. Verify Single-Leader Guardrail
+### 3. Verify Single-Leader Guardrail
 ```bash
-curl -X POST [http://127.0.0.1:8081/kv/illegal](http://127.0.0.1:8081/kv/illegal) -d "Payload"
+curl -X POST http://localhost:8081/kv/illegal -d "Payload"
 # Response: Forbidden: Follower dugumune dogrudan yazilamaz... (HTTP 403)
 ```
 
-### 5. Run Compaction
-Trigger manual merge/compaction on the active log file:
+### 4. Trigger Log Compaction
 ```bash
-curl -X POST [http://127.0.0.1:8080/compact](http://127.0.0.1:8080/compact)
+curl -X POST http://localhost:8080/compact
 ```
 
 ---
 
-## 📈 Roadmap & Next Iterations
+## 📈 Roadmap & Completed Milestones
 - [x] Append-only binary disk storage & $O(1)$ in-memory index
 - [x] Tombstone-based deletion and sequential log compaction
 - [x] Built-in multi-threaded HTTP server
 - [x] k6 performance & p99 tail-latency benchmarking
 - [x] Single-Leader asynchronous replication with safety guardrails
-- [ ] Fault-tolerance: Replication backlog retry queue on follower downtime
-- [ ] Multi-stage Dockerfile and Docker Compose orchestration
+- [x] Fault-tolerant replication task queue & retry worker
+- [x] Multi-stage Dockerfile and Docker Compose orchestration
