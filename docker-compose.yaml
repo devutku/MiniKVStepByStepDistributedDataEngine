@@ -1,0 +1,37 @@
+services:
+  leader:
+    build: .
+    container_name: minikv-leader
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ROLE=LEADER
+      - DATA_FILE=/app/data/leader_data.db
+      - FOLLOWER_URL=http://follower:8081
+    volumes:
+      - leader_data:/app/data
+    networks:
+      - minikv-net
+
+  follower:
+    build: .
+    container_name: minikv-follower
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - ROLE=FOLLOWER
+      - DATA_FILE=/app/data/follower_data.db
+    volumes:
+      - follower_data:/app/data
+    networks:
+      - minikv-net
+
+volumes:
+  leader_data:
+  follower_data:
+
+networks:
+  minikv-net:
+    driver: bridge
