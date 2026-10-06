@@ -1,45 +1,27 @@
 import java.io.IOException;
 
 public class Main {
-    void main() throws IOException {
-    /*String dbPath = "data.db";
+    public static void main(String[] args) throws IOException {
+        // 1. Leader için storage başlat
+        MiniKVStorage storage = new MiniKVStorage("leader_data.db");
 
-    try (MiniKVStorage storage = new MiniKVStorage(dbPath)) {
-        // 1. İlk yazma
-        storage.set("user_1", "Ahmet");
+        // 2. Sunucuyu LEADER rolüyle 8080 portunda aç
+        MiniKVHttpServer server = new MiniKVHttpServer(8080, storage, NodeRole.LEADER);
 
-        // 2. Aynı anahtarı güncelleme (Append-only mantığı)
-        storage.set("user_1", "Mehmet");
+        // 3. İleride açılacak Follower'ın adresini kaydet
+        server.addFollower("http://127.0.0.1:8081");
 
-        // 3. Yeni bir anahtar ekleme
-        storage.set("role", "Engineer");
-        IO.println("Role: " + storage.get("role"));
+        // 4. Sunucuyu başlat
+        server.start();
 
-    }*/
-        String dbPath = "data.db";
-        int port = 8080;
+        System.out.println(">>> SADECE LEADER ÇALIŞIYOR (Port: 8080) <<<");
 
-        try {
-            // Depolama motorunu başlat
-            MiniKVStorage storage = new MiniKVStorage(dbPath);
-
-            // HTTP API katmanını motor ile bağla
-            MiniKVHttpServer server = new MiniKVHttpServer(port, storage, NodeRole.FOLLOWER);
-            server.start();
-
-            // JVM kapandığında dosyaları düzgün kapatmak için shutdown hook
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("Sunucu kapatılıyor...");
-                server.stop();
-                try {
-                    storage.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }));
-
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        // Uygulama kapandığında dosya kilidini ve sunucuyu temiz kapat
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            server.stop();
+            try {
+                storage.close();
+            } catch (IOException ignored) {}
+        }));
     }
 }

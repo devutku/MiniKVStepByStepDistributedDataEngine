@@ -12,12 +12,17 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 public class MiniKVHttpServer {
     private final HttpServer server;
     private final MiniKVStorage storage;
+    private final BlockingQueue<ReplicationTask> replicationQueue = new LinkedBlockingQueue<>();
+    private volatile boolean running = true;
 
     // [YENİ 1]: Düğümün rolü (LEADER veya FOLLOWER)
     private final NodeRole role;
@@ -43,33 +48,69 @@ public class MiniKVHttpServer {
         this.followers.add(followerBaseUrl);
     }
 
+    private void startReplicationWorker() {
+        Executors.newSingleThreadExecutor().submit(() -> {
+            while (running) {
+                try {
+                    // Kuyruktan sıradaki görevi al (bloklayıcı)
+                    ReplicationTask task = replicationQueue.poll(500, TimeUnit.MILLISECONDS);
+                    if (task == null) continue;
+
+                    // Tüm follower'lara senkronize etmeyi dene
+                    for (String followerUrl : followers) {
+                        boolean success = sendReplicationRequest(followerUrl, task);
+
+                        // Eğer Follower kapalıysa görevi kuyruğun başına geri koy ve bekle
+                        while (!success && running) {
+                            System.err.println("[BACKLOG] Follower (" + followerUrl + ") erisilemez! 2 saniye sonra tekrar denenecek...");
+                            Thread.sleep(2000);
+                            success = sendReplicationRequest(followerUrl, task);
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    System.err.println("Replikasyon worker hatasi: " + e.getMessage());
+                }
+            }
+        });
+    }
+
+    private boolean sendReplicationRequest(String followerUrl, ReplicationTask task) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(followerUrl + "/internal/replicate"))
+                    .header("Content-Type", "text/plain")
+                    .timeout(java.time.Duration.ofMillis(1000))
+                    .POST(HttpRequest.BodyPublishers.ofString(task.toPayload()))
+                    .build();
+
+            HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+            return response.statusCode() == 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public void start() {
         server.start();
         System.out.println("[" + role + "] MiniKV HTTP Sunucusu ayakta: http://localhost:" + server.getAddress().getPort());
+
+        // Lider ise kuyruğu tüketen arka plan worker'ını başlat
+        if (role == NodeRole.LEADER) {
+            startReplicationWorker();
+        }
     }
 
     public void stop() {
+        running = false;
         server.stop(0);
     }
 
     // [YENİ 5]: Liderin tüm takipçilere arka planda asenkron veri göndermesi
     private void replicateToFollowers(String action, String key, String value) {
-        for (String followerUrl : followers) {
-            Executors.defaultThreadFactory().newThread(() -> {
-                try {
-                    String payload = action + ":" + key + (value != null ? ":" + value : "");
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create(followerUrl + "/internal/replicate"))
-                            .header("Content-Type", "text/plain")
-                            .POST(HttpRequest.BodyPublishers.ofString(payload))
-                            .build();
-
-                    httpClient.send(request, HttpResponse.BodyHandlers.discarding());
-                } catch (Exception e) {
-                    System.err.println("Replikasyon iletim hatası (" + followerUrl + "): " + e.getMessage());
-                }
-            }).start();
-        }
+        replicationQueue.offer(new ReplicationTask(action, key, value));
     }
 
     private class KVHandler implements HttpHandler {
